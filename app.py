@@ -5,14 +5,14 @@ import plotly.graph_objects as go
 from prophet import Prophet
 from sklearn.ensemble import IsolationForest
 import numpy as np
-import warnings
 from datetime import datetime
+import warnings
 
 warnings.filterwarnings("ignore")
 
-# --------------------------------------------------
-# Page Config + Theme
-# --------------------------------------------------
+# ==================================================
+# PAGE CONFIG + GLOBAL STYLE
+# ==================================================
 st.set_page_config(
     page_title="🚀 AI Quant Financial Dashboard",
     layout="wide",
@@ -21,15 +21,53 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-.main {padding-top:15px;}
+.main {padding-top:10px;}
 .block-container {padding-left:2rem;padding-right:2rem;}
 .metric-label {font-size:14px;}
+.big-title {font-size:48px;font-weight:800;}
+.sub-title {font-size:20px;color:#888;}
+.card {
+    background-color:#0e1117;
+    padding:25px;
+    border-radius:18px;
+    box-shadow:0 4px 20px rgba(0,0,0,0.3);
+}
 </style>
 """, unsafe_allow_html=True)
 
-# --------------------------------------------------
-# Cached Data
-# --------------------------------------------------
+# ==================================================
+# SESSION STATE
+# ==================================================
+if "page" not in st.session_state:
+    st.session_state.page = "welcome"
+
+# ==================================================
+# WELCOME PAGE
+# ==================================================
+if st.session_state.page == "welcome":
+    st.markdown("<div class='big-title'>🚀 AI Quant Financial Dashboard</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sub-title'>Institutional-grade analytics powered by AI</div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("### 📈 Technical Intelligence")
+        st.markdown("- SMA / EMA / RSI / MACD\n- Support & Resistance\n- VWAP & Volatility")
+    with c2:
+        st.markdown("### 🔮 AI Forecasting")
+        st.markdown("- Prophet-based forecasting\n- Confidence intervals\n- Trend detection")
+    with c3:
+        st.markdown("### 🧠 Risk & Anomaly")
+        st.markdown("- Isolation Forest anomalies\n- Sharpe Ratio\n- Max Drawdown")
+
+    st.markdown("---")
+    if st.button("🚀 Launch Dashboard", use_container_width=True):
+        st.session_state.page = "dashboard"
+    st.stop()
+
+# ==================================================
+# DATA CACHE
+# ==================================================
 @st.cache_data(ttl=3600)
 def load_stock_data(ticker, period):
     df = yf.download(ticker, period=period, auto_adjust=False, progress=False)
@@ -37,7 +75,6 @@ def load_stock_data(ticker, period):
         return None
     df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
     return df.dropna()
-
 
 @st.cache_data(ttl=3600)
 def load_fundamentals(ticker):
@@ -55,10 +92,9 @@ def load_fundamentals(ticker):
         "Industry": info.get("industry"),
     }
 
-
-# --------------------------------------------------
-# Feature Engineering
-# --------------------------------------------------
+# ==================================================
+# FEATURE ENGINEERING
+# ==================================================
 def technical_indicators(df):
     df = df.copy()
 
@@ -77,23 +113,12 @@ def technical_indicators(df):
     df["MACD"] = ema12 - ema26
     df["MACD_Signal"] = df["MACD"].ewm(span=9).mean()
 
-    tr = pd.concat([
-        df["High"] - df["Low"],
-        abs(df["High"] - df["Close"].shift()),
-        abs(df["Low"] - df["Close"].shift())
-    ], axis=1).max(axis=1)
-    df["ATR"] = tr.rolling(14).mean()
-
     df["VWAP"] = (df["Volume"] * (df["High"] + df["Low"] + df["Close"]) / 3).cumsum() / df["Volume"].cumsum()
 
+    df["Support"] = df["Low"].rolling(20).min()
+    df["Resistance"] = df["High"].rolling(20).max()
+
     return df
-
-
-def support_resistance(df, window=20):
-    df["Support"] = df["Low"].rolling(window).min()
-    df["Resistance"] = df["High"].rolling(window).max()
-    return df
-
 
 def detect_anomalies(df):
     returns = df["Close"].pct_change().dropna()
@@ -103,15 +128,13 @@ def detect_anomalies(df):
     df.loc[returns.index, "Anomaly"] = preds
     return df
 
-
-# --------------------------------------------------
-# Forecasting
-# --------------------------------------------------
+# ==================================================
+# FORECASTING
+# ==================================================
 def prepare_prophet(df):
     p = df["Close"].reset_index()
     p.columns = ["ds", "y"]
     return p
-
 
 @st.cache_resource
 def train_prophet(df):
@@ -124,170 +147,152 @@ def train_prophet(df):
     model.fit(df)
     return model
 
-
 def forecast_price(df, days):
     p = prepare_prophet(df)
     model = train_prophet(p)
     future = model.make_future_dataframe(periods=days)
     return model.predict(future)
 
-
-# --------------------------------------------------
-# Risk & Performance
-# --------------------------------------------------
+# ==================================================
+# RISK METRICS
+# ==================================================
 def risk_metrics(df):
     returns = df["Close"].pct_change().dropna()
     sharpe = np.sqrt(252) * returns.mean() / returns.std()
     max_dd = ((df["Close"] / df["Close"].cummax()) - 1).min()
-    return sharpe, max_dd * 100
+    volatility = returns.std() * np.sqrt(252) * 100
+    return sharpe, max_dd * 100, volatility
 
-
-def summary_metrics(df):
-    cp = df["Close"].iloc[-1]
-    chg = df["Close"].pct_change().iloc[-1] * 100
-    vol = df["Close"].pct_change().rolling(30).std().iloc[-1] * 100
-    avg_vol = df["Volume"].tail(30).mean()
-    trend = "📈 Bullish" if chg > 0 else "📉 Bearish"
-    return cp, chg, vol, avg_vol, trend
-
-
-# --------------------------------------------------
-# Sidebar
-# --------------------------------------------------
+# ==================================================
+# SIDEBAR
+# ==================================================
 st.sidebar.title("⚙️ Controls")
 
 ticker = st.sidebar.text_input("Ticker", "AAPL").upper()
 period = st.sidebar.selectbox("Period", ["6mo", "1y", "2y", "5y", "10y"], index=2)
-forecast_days = st.sidebar.slider("Forecast Days", 7, 180, 60)
-show_ind = st.sidebar.multiselect(
+forecast_days = st.sidebar.slider("Forecast Days", 7, 365, 90)
+indicators = st.sidebar.multiselect(
     "Indicators",
     ["SMA20", "SMA50", "EMA20", "VWAP", "Support", "Resistance"],
     default=["SMA20", "SMA50"]
 )
-refresh = st.sidebar.button("🔄 Refresh")
+
+# ==================================================
+# LOAD DATA
+# ==================================================
+df = load_stock_data(ticker, period)
+
+if df is None:
+    st.error("❌ Invalid ticker or no data available.")
+    st.stop()
+
+df = technical_indicators(df)
+df = detect_anomalies(df)
+forecast = forecast_price(df, forecast_days)
+fundamentals = load_fundamentals(ticker)
+sharpe, max_dd, volatility = risk_metrics(df)
+
+# ==================================================
+# DASHBOARD
+# ==================================================
+st.markdown(f"## 📊 {ticker} Quant Dashboard")
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Last Price", f"${df['Close'].iloc[-1]:.2f}")
+m2.metric("Sharpe Ratio", f"{sharpe:.2f}")
+m3.metric("Volatility", f"{volatility:.2f}%")
+m4.metric("Max Drawdown", f"{max_dd:.2f}%")
+
+tabs = st.tabs(["📈 Price", "📊 Indicators", "🔮 Forecast", "🏦 Fundamentals", "📉 Risk", "📥 Export"])
 
 # --------------------------------------------------
-# Load Pipeline
+# PRICE
 # --------------------------------------------------
-if refresh or "data" not in st.session_state:
-    data = load_stock_data(ticker, period)
-    if data is not None:
-        data = technical_indicators(data)
-        data = support_resistance(data)
-        data = detect_anomalies(data)
-        forecast = forecast_price(data, forecast_days)
-        fundamentals = load_fundamentals(ticker)
-        metrics = summary_metrics(data)
-        sharpe, max_dd = risk_metrics(data)
-
-        st.session_state.update({
-            "data": data,
-            "forecast": forecast,
-            "fundamentals": fundamentals,
-            "metrics": metrics,
-            "sharpe": sharpe,
-            "max_dd": max_dd
-        })
-    else:
-        st.session_state.data = None
-
-df = st.session_state.get("data")
+with tabs[0]:
+    fig = go.Figure()
+    fig.add_candlestick(
+        x=df.index,
+        open=df["Open"],
+        high=df["High"],
+        low=df["Low"],
+        close=df["Close"],
+        name="Price"
+    )
+    for ind in indicators:
+        fig.add_trace(go.Scatter(x=df.index, y=df[ind], name=ind))
+    anomalies = df[df["Anomaly"] == -1]
+    fig.add_trace(go.Scatter(
+        x=anomalies.index,
+        y=anomalies["Close"],
+        mode="markers",
+        marker=dict(color="red", size=7),
+        name="Anomaly"
+    ))
+    fig.update_layout(height=520, xaxis_rangeslider_visible=False)
+    st.plotly_chart(fig, use_container_width=True)
 
 # --------------------------------------------------
-# Dashboard
+# INDICATORS
 # --------------------------------------------------
-if df is not None:
-    cp, chg, vol, avg_vol, trend = st.session_state.metrics
+with tabs[1]:
+    rsi_fig = go.Figure()
+    rsi_fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], name="RSI"))
+    rsi_fig.add_hline(y=70, line_dash="dash")
+    rsi_fig.add_hline(y=30, line_dash="dash")
+    rsi_fig.update_layout(height=300)
+    st.plotly_chart(rsi_fig, use_container_width=True)
 
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Price", f"${cp:.2f}", f"{chg:.2f}%")
-    c2.metric("Trend", trend)
-    c3.metric("Volatility", f"{vol:.2f}%")
-    c4.metric("Avg Volume", f"{avg_vol:,.0f}")
-    c5.metric("Sharpe", f"{st.session_state.sharpe:.2f}")
-    c6.metric("Max Drawdown", f"{st.session_state.max_dd:.2f}%")
+    macd_fig = go.Figure()
+    macd_fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD"))
+    macd_fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal"))
+    macd_fig.update_layout(height=300)
+    st.plotly_chart(macd_fig, use_container_width=True)
 
-    tabs = st.tabs(["📈 Price", "📊 Indicators", "🔮 Forecast", "🏦 Fundamentals", "📉 Risk", "📥 Export"])
+# --------------------------------------------------
+# FORECAST
+# --------------------------------------------------
+with tabs[2]:
+    fig_f = go.Figure()
+    fig_f.add_trace(go.Scatter(x=df.index, y=df["Close"], name="History"))
+    fig_f.add_trace(go.Scatter(x=forecast["ds"], y=forecast["yhat"], name="Forecast"))
+    fig_f.add_trace(go.Scatter(
+        x=forecast["ds"],
+        y=forecast["yhat_upper"],
+        fill=None,
+        name="Upper"
+    ))
+    fig_f.add_trace(go.Scatter(
+        x=forecast["ds"],
+        y=forecast["yhat_lower"],
+        fill="tonexty",
+        name="Lower"
+    ))
+    fig_f.update_layout(height=520)
+    st.plotly_chart(fig_f, use_container_width=True)
 
-    # -------- Price
-    with tabs[0]:
-        fig = go.Figure()
-        fig.add_candlestick(
-            x=df.index,
-            open=df["Open"],
-            high=df["High"],
-            low=df["Low"],
-            close=df["Close"],
-            name="Price"
-        )
+# --------------------------------------------------
+# FUNDAMENTALS
+# --------------------------------------------------
+with tabs[3]:
+    st.dataframe(pd.DataFrame(fundamentals, index=["Value"]).T, use_container_width=True)
 
-        for ind in show_ind:
-            fig.add_trace(go.Scatter(x=df.index, y=df[ind], name=ind))
+# --------------------------------------------------
+# RISK
+# --------------------------------------------------
+with tabs[4]:
+    returns = df["Close"].pct_change()
+    hist = go.Figure()
+    hist.add_histogram(x=returns, nbinsx=60)
+    hist.update_layout(height=420, title="Return Distribution")
+    st.plotly_chart(hist, use_container_width=True)
 
-        anomalies = df[df["Anomaly"] == -1]
-        fig.add_trace(go.Scatter(
-            x=anomalies.index,
-            y=anomalies["Close"],
-            mode="markers",
-            marker=dict(color="red", size=7),
-            name="Anomaly"
-        ))
-
-        fig.update_layout(height=500, xaxis_rangeslider_visible=False)
-        st.plotly_chart(fig, use_container_width="stretch")
-
-    # -------- Indicators
-    with tabs[1]:
-        rsi_fig = go.Figure()
-        rsi_fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], name="RSI"))
-        rsi_fig.add_hline(y=70, line_dash="dash")
-        rsi_fig.add_hline(y=30, line_dash="dash")
-        rsi_fig.update_layout(height=300)
-        st.plotly_chart(rsi_fig, use_container_width="stretch")
-
-        macd_fig = go.Figure()
-        macd_fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="MACD"))
-        macd_fig.add_trace(go.Scatter(x=df.index, y=df["MACD_Signal"], name="Signal"))
-        macd_fig.update_layout(height=300)
-        st.plotly_chart(macd_fig, use_container_width="stretch")
-
-    # -------- Forecast
-    with tabs[2]:
-        fc = st.session_state.forecast
-        fig_f = go.Figure()
-        fig_f.add_trace(go.Scatter(x=df.index, y=df["Close"], name="History"))
-        fig_f.add_trace(go.Scatter(x=fc["ds"], y=fc["yhat"], name="Forecast"))
-        fig_f.add_trace(go.Scatter(
-            x=fc["ds"], y=fc["yhat_lower"],
-            fill="tonexty", name="Confidence"
-        ))
-        fig_f.update_layout(height=500)
-        st.plotly_chart(fig_f, use_container_width="stretch")
-
-    # -------- Fundamentals
-    with tabs[3]:
-        print(df.dtypes)
-        st.dataframe(pd.DataFrame(st.session_state.fundamentals, index=["Value"]).T)
-        
-
-
-    # -------- Risk
-    with tabs[4]:
-        returns = df["Close"].pct_change()
-        hist = go.Figure()
-        hist.add_histogram(x=returns, nbinsx=50)
-        hist.update_layout(height=400, title="Return Distribution")
-        st.plotly_chart(hist, use_container_width="stretch")
-
-    # -------- Export
-    with tabs[5]:
-        st.download_button(
-            "⬇️ Download CSV",
-            df.to_csv().encode("utf-8"),
-            file_name=f"{ticker}_{datetime.now().date()}.csv",
-            mime="text/csv"
-        )
-
-else:
-    st.warning("Invalid ticker or no data available.")
-
+# --------------------------------------------------
+# EXPORT
+# --------------------------------------------------
+with tabs[5]:
+    st.download_button(
+        "⬇️ Download CSV",
+        df.to_csv().encode("utf-8"),
+        file_name=f"{ticker}_{datetime.now().date()}.csv",
+        mime="text/csv"
+    )
